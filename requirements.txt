@@ -1,0 +1,15 @@
+# Install PyTorch with CUDA first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# Then install these:
+gradio>=4.0
+heretic-llm>=1.2.0
+accelerate~=1.10
+bitsandbytes~=0.45
+datasets~=4.0
+huggingface-hub~=0.34
+optuna~=4.5
+peft~=0.14
+pydantic-settings~=2.10
+transformers~=4.57
+rich~=14.1
