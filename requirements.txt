@@ -1,5 +1,5 @@
 # Install PyTorch with CUDA first:
-#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
 #
 # Then install these:
 gradio>=4.0
