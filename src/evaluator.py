@@ -18,7 +18,7 @@ def evaluate_model(
     model = None
     try:
         if not model_path or not model_path.strip():
-            yield "❌ Please provide a model path."
+            yield "Please provide a model path."
             return
 
         model_path = model_path.strip()
@@ -29,10 +29,8 @@ def evaluate_model(
         from heretic.model import Model
 
         quant = None
-        if quantization == "8-bit (bitsandbytes)":
-            quant = QuantizationMethod.INT8
-        elif quantization == "4-bit (bitsandbytes)":
-            quant = QuantizationMethod.INT4
+        if quantization == "4-bit (bitsandbytes)":
+            quant = QuantizationMethod.BNB_4BIT
 
         kwargs = {"model": model_path}
         if quant is not None:
@@ -50,11 +48,7 @@ def evaluate_model(
         try:
             model = Model(settings)
         except Exception as e:
-            error_msg = str(e)
-            if "404" in error_msg or "not found" in error_msg.lower():
-                yield f"❌ Model '{model_path}' was not found on HuggingFace. Please check the model path."
-            else:
-                yield f"❌ Failed to load model: {error_msg}"
+            yield f"Failed to load model: {e}"
             return
 
         load_time = format_duration(time.time() - start_time)
@@ -65,7 +59,7 @@ def evaluate_model(
         try:
             evaluator = Evaluator(settings, model)
         except Exception as e:
-            yield f"❌ Failed to set up evaluator: {e}"
+            yield f"Failed to set up evaluator: {e}"
             return
 
         yield "Computing evaluation scores..."
@@ -78,18 +72,18 @@ def evaluate_model(
             total_time = format_duration(time.time() - start_time)
 
             yield (
-                f"✅ Evaluation complete ({total_time})\n\n"
+                f"Evaluation complete ({total_time})\n\n"
                 f"Model: {model_path}\n"
                 f"Refusals: {refusals}\n"
                 f"KL Divergence: {kl_divergence:.4f}\n"
                 f"Quantization: {quantization}"
             )
         except Exception as e:
-            yield f"❌ Evaluation failed: {e}"
+            yield f"Evaluation failed: {e}"
             return
 
     except Exception as e:
-        yield f"❌ Evaluation error: {e}"
+        yield f"Evaluation error: {e}"
     finally:
         if model is not None:
             try:
@@ -117,9 +111,9 @@ def chat_with_model(
     model = None
     try:
         if not model_path or not model_path.strip():
-            return "❌ Please provide a model path."
+            return "Please provide a model path."
         if not prompt or not prompt.strip():
-            return "❌ Please enter a prompt."
+            return "Please enter a prompt."
 
         model_path = model_path.strip()
 
@@ -127,10 +121,8 @@ def chat_with_model(
         from heretic.model import Model
 
         quant = None
-        if quantization == "8-bit (bitsandbytes)":
-            quant = QuantizationMethod.INT8
-        elif quantization == "4-bit (bitsandbytes)":
-            quant = QuantizationMethod.INT4
+        if quantization == "4-bit (bitsandbytes)":
+            quant = QuantizationMethod.BNB_4BIT
 
         kwargs = {
             "model": model_path,
@@ -152,15 +144,10 @@ def chat_with_model(
         if responses and responses[0]:
             return responses[0]
         else:
-            return "❌ Model returned an empty response."
+            return "Model returned an empty response."
 
     except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg or "not found" in error_msg.lower():
-            return f"❌ Model '{model_path}' was not found on HuggingFace. Please check the model path."
-        elif "connection" in error_msg.lower() or "network" in error_msg.lower():
-            return "❌ Network error. Please check your internet connection and try again."
-        return f"❌ Chat failed: {error_msg}"
+        return f"Chat failed: {e}"
     finally:
         if model is not None:
             try:

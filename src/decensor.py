@@ -68,10 +68,8 @@ def _make_settings(
     from heretic.config import Settings, QuantizationMethod
 
     quant = None
-    if quantization == "8-bit (bitsandbytes)":
-        quant = QuantizationMethod.INT8
-    elif quantization == "4-bit (bitsandbytes)":
-        quant = QuantizationMethod.INT4
+    if quantization == "4-bit (bitsandbytes)":
+        quant = QuantizationMethod.BNB_4BIT
 
     kwargs = {
         "model": model_path,
@@ -130,7 +128,7 @@ def run_decensor(
         yield "Phase 1/8: Validating inputs..."
 
         if not model_path or not model_path.strip():
-            yield "❌ Model path cannot be empty."
+            yield "Model path cannot be empty."
             return
 
         model_path = model_path.strip()
@@ -154,7 +152,7 @@ def run_decensor(
 
         cuda_available, cuda_info = _check_cuda()
         if not cuda_available:
-            yield f"❌ No CUDA GPU detected. Heretic requires an NVIDIA GPU with CUDA support.\nDetails: {cuda_info}"
+            yield f"No CUDA GPU detected. Heretic requires an NVIDIA GPU with CUDA support.\nDetails: {cuda_info}"
             return
 
         # Match Heretic's run() setup
@@ -179,7 +177,7 @@ def run_decensor(
                 mode=mode,
             )
         except Exception as e:
-            yield f"❌ Failed to create settings: {e}"
+            yield f"Failed to create settings: {e}"
             return
 
         yield f"Phase 2/8: Settings configured — {mode} mode, {n_trials} trials"
@@ -193,12 +191,7 @@ def run_decensor(
             model = Model(settings)
         except Exception as e:
             error_msg = str(e)
-            if "404" in error_msg or "not found" in error_msg.lower():
-                yield f"❌ Model '{model_path}' was not found on HuggingFace. Please check the model path."
-            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
-                yield "❌ Network error. Please check your internet connection and try again."
-            else:
-                yield f"❌ Failed to load model: {error_msg}"
+            yield f"Failed to load model: {error_msg}"
             return
 
         elapsed = format_duration(time.time() - start_time)
@@ -213,7 +206,7 @@ def run_decensor(
             good_prompts = load_prompts(settings, settings.good_prompts)
             bad_prompts = load_prompts(settings, settings.bad_prompts)
         except Exception as e:
-            yield f"❌ Failed to load prompt datasets: {e}"
+            yield f"Failed to load prompt datasets: {e}"
             return
 
         yield f"Phase 4/8: Loaded {len(good_prompts)} good + {len(bad_prompts)} bad prompts"
@@ -274,10 +267,10 @@ def run_decensor(
             empty_cache()
 
         except torch.cuda.OutOfMemoryError:
-            yield "❌ Out of GPU memory during direction computation. Try enabling 4-bit quantization or using a smaller model."
+            yield "Out of GPU memory during direction computation. Try enabling 4-bit quantization or using a smaller model."
             return
         except Exception as e:
-            yield f"❌ Failed during direction computation: {e}"
+            yield f"Failed during direction computation: {e}"
             return
 
         elapsed = format_duration(time.time() - start_time)
@@ -293,7 +286,7 @@ def run_decensor(
             base_refusals = getattr(evaluator, "base_refusals", None)
             n_bad = len(getattr(evaluator, "bad_prompts", []))
         except Exception as e:
-            yield f"❌ Failed to set up evaluator: {e}"
+            yield f"Failed to set up evaluator: {e}"
             return
 
         elapsed = format_duration(time.time() - start_time)
@@ -507,7 +500,7 @@ def run_decensor(
             gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "Unknown"
 
             yield (
-                f"✅ Decensoring complete!\n"
+                f"Decensoring complete!\n"
                 f"{'=' * 45}\n"
                 f"\n"
                 f"MODEL\n"
@@ -536,19 +529,13 @@ def run_decensor(
             )
 
         except Exception as e:
-            yield f"❌ Failed to save model: {e}"
+            yield f"Failed to save model: {e}"
             return
 
     except torch.cuda.OutOfMemoryError:
-        yield "❌ Out of GPU memory. Try enabling 4-bit quantization or using a smaller model."
+        yield "Out of GPU memory. Try enabling 4-bit quantization or using a smaller model."
     except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg or "not found" in error_msg.lower():
-            yield f"❌ Model '{model_path}' was not found on HuggingFace. Please check the model path."
-        elif "connection" in error_msg.lower() or "network" in error_msg.lower():
-            yield "❌ Network error. Please check your internet connection and try again."
-        else:
-            yield f"❌ Decensoring failed: {error_msg}"
+        yield f"Decensoring failed: {e}"
     finally:
         # Always free GPU memory
         if model is not None:

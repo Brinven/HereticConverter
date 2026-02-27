@@ -157,46 +157,8 @@ footer { display: none !important; }
     border-radius: 12px !important;
 }
 
-.gradio-container .tabs {
-    position: relative;
-}
 .gradio-container .tabs > .tab-nav {
     margin-bottom: 1rem;
-}
-.mode-toggle {
-    position: absolute !important;
-    left: auto !important;
-    right: 0 !important;
-    top: 0 !important;
-    z-index: 10;
-    border: none !important;
-    background: transparent !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    box-shadow: none !important;
-    width: auto !important;
-    min-width: 0 !important;
-}
-.mode-toggle .wrap {
-    gap: 0.75rem;
-}
-.mode-toggle label {
-    font-family: 'Geist', system-ui, sans-serif !important;
-    font-size: 0.85rem !important;
-    color: #a1a1aa !important;
-    padding: 0.4rem 0 !important;
-    border-bottom: 2px solid transparent !important;
-    background: transparent !important;
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    transition: color 0.15s, border-color 0.15s;
-}
-.mode-toggle label.selected {
-    color: #f4f4f5 !important;
-    border-bottom-color: #10b981 !important;
-}
-.mode-toggle label:hover {
-    color: #f4f4f5 !important;
 }
 
 .gradio-container .tabitem {
@@ -320,6 +282,36 @@ def handle_download(model_name):
         return gr.update(), result["message"]
 
 
+def discover_local_models():
+    """Find model directories in ./models/ and HuggingFace cache."""
+    found = []
+
+    # App output directory
+    models_dir = Path(DEFAULT_OUTPUT_DIR)
+    if models_dir.exists():
+        for p in sorted(models_dir.iterdir()):
+            if p.is_dir() and (p / "config.json").exists():
+                found.append(str(p.resolve()))
+
+    # HuggingFace cache
+    hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+    if hf_cache.exists():
+        for model_dir in sorted(hf_cache.glob("models--*")):
+            snapshots = model_dir / "snapshots"
+            if snapshots.exists():
+                snaps = sorted(
+                    snapshots.iterdir(),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                for snap in snaps:
+                    if (snap / "config.json").exists():
+                        found.append(str(snap.resolve()))
+                        break  # only latest snapshot per model
+
+    return found
+
+
 def handle_upload(file):
     """Handle the upload/import of a model zip."""
     if file is None:
@@ -341,8 +333,10 @@ def create_app():
         gr.HTML(
             """
             <div class="main-header">
-                <a id="hub-back-link" class="hub-back">&larr; Home Hub</a>
-                <script>document.getElementById('hub-back-link').href='http://'+location.hostname+':9000';</script>
+                <a class="hub-back"
+                   onclick="window.location.href='http://'+window.location.hostname+':9000';return false;"
+                   href="#"
+                >&larr; Home Hub</a>
                 <h1>Heretic Converter</h1>
                 <p>Decensor and de-slop language models, then transfer to your Mac for MLX conversion</p>
             </div>
@@ -362,24 +356,18 @@ def create_app():
             )
 
         with gr.Tabs():
-            decensor_mode = gr.Radio(
-                choices=["Decensor", "De-slop"],
-                value="Decensor",
-                show_label=False,
-                container=False,
-                elem_classes=["mode-toggle"],
-            )
-
             # === Decensor Tab ===
             with gr.Tab("Decensor", id="decensor"):
                 with gr.Row(equal_height=True):
                     with gr.Column(scale=3, min_width=0):
-                        gr.Markdown(
-                            "Browse models at [huggingface.co/models](https://huggingface.co/models)"
+                        model_source = gr.Radio(
+                            choices=["HuggingFace", "Local Path"],
+                            value="HuggingFace",
+                            label="Model Source",
                         )
-                        decensor_model_path = gr.Textbox(
+                        decensor_model_path = gr.Dropdown(
                             label="HuggingFace Model Path",
-                            placeholder="e.g., Qwen/Qwen3-4B-Instruct-2507",
+                            allow_custom_value=True,
                             info="Model identifier from huggingface.co",
                         )
                         decensor_output_name = gr.Textbox(
@@ -402,6 +390,11 @@ def create_app():
                         )
 
                     with gr.Column(scale=2, min_width=0):
+                        decensor_mode = gr.Radio(
+                            choices=["Decensor", "De-slop"],
+                            value="Decensor",
+                            label="Mode",
+                        )
                         decensor_batch_size = gr.Slider(
                             minimum=0, maximum=128, value=0, step=1,
                             label="Batch Size",
@@ -412,6 +405,17 @@ def create_app():
                             label="Max Response Length",
                             info="Tokens generated per evaluation response",
                         )
+
+                model_source.change(
+                    fn=lambda src: gr.update(
+                        label="HuggingFace Model Path" if src == "HuggingFace" else "Local Model",
+                        info="Model identifier from huggingface.co" if src == "HuggingFace" else "Select a model or paste a path",
+                        choices=[] if src == "HuggingFace" else discover_local_models(),
+                        value="",
+                    ),
+                    inputs=model_source,
+                    outputs=decensor_model_path,
+                )
 
                 decensor_btn = gr.Button(
                     "Start Decensoring", variant="primary", size="lg"
@@ -439,10 +443,8 @@ def create_app():
 
             # === Evaluate Tab ===
             with gr.Tab("Evaluate", id="evaluate"):
-                gr.Markdown("### Evaluate a decensored model")
-
-                with gr.Row():
-                    with gr.Column(scale=2):
+                with gr.Row(equal_height=True):
+                    with gr.Column(scale=3, min_width=0):
                         with gr.Row():
                             eval_model_path = gr.Dropdown(
                                 choices=get_model_choices(),
@@ -454,13 +456,15 @@ def create_app():
                             eval_refresh_btn = gr.Button(
                                 "Refresh", size="sm", scale=0, min_width=50
                             )
+
+                    with gr.Column(scale=2, min_width=0):
                         eval_prompt = gr.Textbox(
                             label="Test Prompt (optional)",
                             placeholder="Enter a prompt to test, or leave blank for automated evaluation",
                             lines=3,
                         )
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=2, min_width=0):
                         eval_max_tokens = gr.Slider(
                             minimum=50, maximum=500, value=100, step=10,
                             label="Max Tokens",
@@ -506,17 +510,39 @@ def create_app():
 
             # === Models Tab ===
             with gr.Tab("Models", id="models"):
-                gr.Markdown("### Saved Models")
                 models_display = gr.Markdown(
                     "Click Refresh to see saved models."
                 )
                 with gr.Row():
-                    models_refresh_btn = gr.Button("Refresh", size="sm")
+                    models_refresh_btn = gr.Button(
+                        "Refresh", size="sm", scale=0, min_width=50
+                    )
                     model_selector = gr.Dropdown(
                         choices=get_model_names(),
                         label="Select Model",
-                        scale=3,
+                        scale=4,
                     )
+
+                with gr.Row(equal_height=True):
+                    with gr.Column(scale=1, min_width=0):
+                        download_btn = gr.Button(
+                            "Download as Zip", variant="primary"
+                        )
+                        download_status = gr.Textbox(
+                            label="Download Status", lines=2, interactive=False
+                        )
+                        download_file = gr.File(
+                            label="Download", interactive=False
+                        )
+
+                    with gr.Column(scale=1, min_width=0):
+                        upload_file = gr.File(
+                            label="Upload Model Zip", file_types=[".zip"]
+                        )
+                        import_status = gr.Textbox(
+                            label="Import Status", lines=2, interactive=False
+                        )
+
                 models_refresh_btn.click(
                     fn=lambda: (
                         refresh_model_list(),
@@ -524,35 +550,10 @@ def create_app():
                     ),
                     outputs=[models_display, model_selector],
                 )
-
-                gr.Markdown("### Download Model")
-                gr.Markdown(
-                    "Download a model as a zip file for transfer to your Mac."
-                )
-                download_btn = gr.Button(
-                    "Download as Zip", variant="primary"
-                )
-                download_status = gr.Textbox(
-                    label="Status", lines=2, interactive=False
-                )
-                download_file = gr.File(
-                    label="Download", interactive=False
-                )
                 download_btn.click(
                     fn=handle_download,
                     inputs=model_selector,
                     outputs=[download_file, download_status],
-                )
-
-                gr.Markdown("### Import Model")
-                gr.Markdown(
-                    "Upload a model zip file to import into the models directory."
-                )
-                upload_file = gr.File(
-                    label="Upload Model Zip", file_types=[".zip"]
-                )
-                import_status = gr.Textbox(
-                    label="Import Status", lines=2, interactive=False
                 )
                 upload_file.change(
                     fn=handle_upload,
