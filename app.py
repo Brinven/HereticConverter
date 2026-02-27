@@ -3,12 +3,216 @@
 from pathlib import Path
 
 import gradio as gr
+from gradio.themes import Base
+from gradio.themes.utils import colors, sizes, fonts
 
 from src.decensor import run_decensor
 from src.evaluator import evaluate_model, chat_with_model
 from src.utils import list_saved_models, zip_model, import_model_zip
 
 DEFAULT_OUTPUT_DIR = "./models"
+
+# --- Dark zinc/emerald theme ---
+
+_zinc = colors.Color(
+    c50="#fafafa", c100="#f4f4f5", c200="#e4e4e7", c300="#d4d4d8",
+    c400="#a1a1aa", c500="#71717a", c600="#52525b", c700="#3f3f46",
+    c800="#27272a", c900="#18181b", c950="#09090b",
+    name="zinc",
+)
+
+_emerald = colors.Color(
+    c50="#ecfdf5", c100="#d1fae5", c200="#a7f3d0", c300="#6ee7b7",
+    c400="#34d399", c500="#10b981", c600="#059669", c700="#047857",
+    c800="#065f46", c900="#064e3b", c950="#022c22",
+    name="emerald",
+)
+
+dark_theme = Base(
+    primary_hue=_emerald,
+    secondary_hue=_zinc,
+    neutral_hue=_zinc,
+    font=fonts.GoogleFont("Geist"),
+    font_mono=fonts.GoogleFont("Geist Mono"),
+).set(
+    body_background_fill="#09090b",
+    body_background_fill_dark="#09090b",
+    body_text_color="#f4f4f5",
+    body_text_color_dark="#f4f4f5",
+    body_text_color_subdued="#a1a1aa",
+    body_text_color_subdued_dark="#a1a1aa",
+    background_fill_primary="#18181b",
+    background_fill_primary_dark="#18181b",
+    background_fill_secondary="#27272a",
+    background_fill_secondary_dark="#27272a",
+    block_background_fill="#18181b",
+    block_background_fill_dark="#18181b",
+    block_border_color="#1e1e22",
+    block_border_color_dark="#1e1e22",
+    block_label_background_fill="#27272a",
+    block_label_background_fill_dark="#27272a",
+    block_label_text_color="#a1a1aa",
+    block_label_text_color_dark="#a1a1aa",
+    block_title_text_color="#f4f4f5",
+    block_title_text_color_dark="#f4f4f5",
+    input_background_fill="#27272a",
+    input_background_fill_dark="#27272a",
+    input_border_color="#27272a",
+    input_border_color_dark="#27272a",
+    input_placeholder_color="#71717a",
+    input_placeholder_color_dark="#71717a",
+    border_color_accent="#10b981",
+    border_color_accent_dark="#10b981",
+    border_color_primary="#1e1e22",
+    border_color_primary_dark="#1e1e22",
+    link_text_color="#34d399",
+    link_text_color_dark="#34d399",
+    link_text_color_hover="#6ee7b7",
+    link_text_color_hover_dark="#6ee7b7",
+    button_primary_background_fill="#10b981",
+    button_primary_background_fill_dark="#10b981",
+    button_primary_background_fill_hover="#059669",
+    button_primary_background_fill_hover_dark="#059669",
+    button_primary_text_color="#022c22",
+    button_primary_text_color_dark="#022c22",
+    button_secondary_background_fill="#27272a",
+    button_secondary_background_fill_dark="#27272a",
+    button_secondary_background_fill_hover="#3f3f46",
+    button_secondary_background_fill_hover_dark="#3f3f46",
+    button_secondary_text_color="#f4f4f5",
+    button_secondary_text_color_dark="#f4f4f5",
+    button_secondary_border_color="#27272a",
+    button_secondary_border_color_dark="#27272a",
+    shadow_drop="none",
+    shadow_drop_lg="none",
+    checkbox_background_color="#27272a",
+    checkbox_background_color_dark="#27272a",
+    checkbox_border_color="#27272a",
+    checkbox_border_color_dark="#27272a",
+    checkbox_label_background_fill="#18181b",
+    checkbox_label_background_fill_dark="#18181b",
+    slider_color="#10b981",
+    slider_color_dark="#10b981",
+    table_even_background_fill="#18181b",
+    table_even_background_fill_dark="#18181b",
+    table_odd_background_fill="#27272a",
+    table_odd_background_fill_dark="#27272a",
+    panel_background_fill="#09090b",
+    panel_background_fill_dark="#09090b",
+    panel_border_color="#1e1e22",
+    panel_border_color_dark="#1e1e22",
+)
+
+# --- Custom CSS ---
+
+css = """
+.main-header { text-align: center; margin-bottom: 0.5em; position: relative; }
+.main-header h1 { margin-bottom: 0.1em; color: #f4f4f5; font-family: 'Geist', system-ui, sans-serif; }
+.main-header p { color: #a1a1aa; font-size: 0.95em; font-family: 'Geist', system-ui, sans-serif; }
+.hub-back {
+    position: absolute; top: 0; left: 0;
+    color: #a1a1aa; font-size: 0.85em; text-decoration: none;
+    font-family: 'Geist', system-ui, sans-serif;
+    transition: color 0.15s;
+}
+.hub-back:hover { color: #34d399; }
+
+.tab-nav button {
+    color: #a1a1aa !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    font-family: 'Geist', system-ui, sans-serif !important;
+    transition: color 0.15s, border-color 0.15s;
+}
+.tab-nav button.selected {
+    color: #f4f4f5 !important;
+    border-bottom-color: #10b981 !important;
+}
+.tab-nav button:hover {
+    color: #f4f4f5 !important;
+}
+
+button.primary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline: 2px solid #10b981 !important;
+    outline-offset: 2px;
+}
+
+textarea[data-testid], .output-textbox textarea {
+    font-family: 'Geist Mono', ui-monospace, monospace !important;
+}
+
+footer { display: none !important; }
+
+.gradio-container {
+    max-width: 1400px !important;
+    margin: 0 auto;
+    padding: 0 2rem !important;
+}
+
+.gradio-container .block {
+    border-radius: 12px !important;
+}
+
+.gradio-container .tabs {
+    position: relative;
+}
+.gradio-container .tabs > .tab-nav {
+    margin-bottom: 1rem;
+}
+.mode-toggle {
+    position: absolute !important;
+    left: auto !important;
+    right: 0 !important;
+    top: 0 !important;
+    z-index: 10;
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    width: auto !important;
+    min-width: 0 !important;
+}
+.mode-toggle .wrap {
+    gap: 0.75rem;
+}
+.mode-toggle label {
+    font-family: 'Geist', system-ui, sans-serif !important;
+    font-size: 0.85rem !important;
+    color: #a1a1aa !important;
+    padding: 0.4rem 0 !important;
+    border-bottom: 2px solid transparent !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    transition: color 0.15s, border-color 0.15s;
+}
+.mode-toggle label.selected {
+    color: #f4f4f5 !important;
+    border-bottom-color: #10b981 !important;
+}
+.mode-toggle label:hover {
+    color: #f4f4f5 !important;
+}
+
+.gradio-container .tabitem {
+    padding-top: 0.5rem;
+}
+
+.gradio-container .form > .block {
+    margin-bottom: 0.25rem;
+}
+
+input[data-testid="textbox"], .gradio-container textarea:not([rows]) {
+    overflow: hidden !important;
+}
+
+.accordion { border-color: #1e1e22 !important; }
+"""
 
 
 def _login_hf(token: str) -> None:
@@ -27,7 +231,7 @@ def handle_decensor(
     try:
         _login_hf(hf_token)
     except Exception as e:
-        yield f"❌ HuggingFace login failed: {e}"
+        yield f"HuggingFace login failed: {e}"
         return
     yield from run_decensor(
         model_path=model_path,
@@ -48,7 +252,7 @@ def handle_evaluate(model_path, quantization, hf_token):
     try:
         _login_hf(hf_token)
     except Exception as e:
-        yield f"❌ HuggingFace login failed: {e}"
+        yield f"HuggingFace login failed: {e}"
         return
     yield from evaluate_model(
         model_path=model_path,
@@ -63,7 +267,7 @@ def handle_chat(model_path, prompt, max_tokens, quantization, hf_token):
     try:
         _login_hf(hf_token)
     except Exception as e:
-        return f"❌ HuggingFace login failed: {e}"
+        return f"HuggingFace login failed: {e}"
     return chat_with_model(
         model_path=model_path,
         prompt=prompt,
@@ -93,7 +297,7 @@ def refresh_model_list():
         return "No saved models found in ./models/"
     lines = []
     for m in models:
-        lines.append(f"• **{m['name']}** — {m['size']}\n  `{m['path']}`")
+        lines.append(f"**{m['name']}** — {m['size']}\n  `{m['path']}`")
     return "\n\n".join(lines)
 
 
@@ -102,48 +306,50 @@ def refresh_model_list():
 def handle_download(model_name):
     """Handle the download button click."""
     if not model_name:
-        return gr.update(), "❌ Please select a model to download."
+        return gr.update(), "Please select a model to download."
 
     models = list_saved_models(DEFAULT_OUTPUT_DIR)
     match = next((m for m in models if m["name"] == model_name), None)
     if not match:
-        return gr.update(), f"❌ Model '{model_name}' not found."
+        return gr.update(), f"Model '{model_name}' not found."
 
     result = zip_model(match["path"])
     if result["success"]:
-        return result["zip_path"], f"✅ {result['message']}"
+        return result["zip_path"], result["message"]
     else:
-        return gr.update(), f"❌ {result['message']}"
+        return gr.update(), result["message"]
 
 
 def handle_upload(file):
     """Handle the upload/import of a model zip."""
     if file is None:
-        return "❌ No file uploaded."
+        return "No file uploaded."
 
     file_path = file.name if hasattr(file, "name") else str(file)
     result = import_model_zip(file_path, DEFAULT_OUTPUT_DIR)
     if result["success"]:
-        return f"✅ {result['message']}"
+        return result["message"]
     else:
-        return f"❌ {result['message']}"
+        return result["message"]
 
 
 # --- Build Gradio UI ---
 
 def create_app():
     """Create and return the Gradio app."""
-    with gr.Blocks(title="Heretic Converter") as app:
+    with gr.Blocks(title="Heretic Converter", theme=dark_theme, css=css) as app:
         gr.HTML(
             """
             <div class="main-header">
-                <h1>🔓 Heretic Converter</h1>
+                <a id="hub-back-link" class="hub-back">&larr; Home Hub</a>
+                <script>document.getElementById('hub-back-link').href='http://'+location.hostname+':9000';</script>
+                <h1>Heretic Converter</h1>
                 <p>Decensor and de-slop language models, then transfer to your Mac for MLX conversion</p>
             </div>
             """
         )
 
-        with gr.Accordion("🔑 HuggingFace Token (required for gated models)", open=False):
+        with gr.Accordion("HuggingFace Token (required for gated models)", open=False):
             gr.Markdown(
                 "Some models require access approval. "
                 "Get your token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)"
@@ -156,12 +362,18 @@ def create_app():
             )
 
         with gr.Tabs():
-            # === Decensor Tab ===
-            with gr.Tab("🔓 Decensor", id="decensor"):
-                gr.Markdown("### Decensor a HuggingFace model")
+            decensor_mode = gr.Radio(
+                choices=["Decensor", "De-slop"],
+                value="Decensor",
+                show_label=False,
+                container=False,
+                elem_classes=["mode-toggle"],
+            )
 
-                with gr.Row():
-                    with gr.Column(scale=2):
+            # === Decensor Tab ===
+            with gr.Tab("Decensor", id="decensor"):
+                with gr.Row(equal_height=True):
+                    with gr.Column(scale=3, min_width=0):
                         gr.Markdown(
                             "Browse models at [huggingface.co/models](https://huggingface.co/models)"
                         )
@@ -175,25 +387,21 @@ def create_app():
                             placeholder="Leave blank for auto-generated name",
                             info="Name for the output model directory",
                         )
-                        decensor_mode = gr.Radio(
-                            choices=["Decensor", "De-slop"],
-                            value="Decensor",
-                            label="Mode",
-                            info="Decensor: remove safety alignment. De-slop: remove purple prose.",
-                        )
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=2, min_width=0):
                         decensor_n_trials = gr.Slider(
                             minimum=10, maximum=500, value=200, step=10,
                             label="Optimization Trials",
                             info="More trials = better results but slower",
                         )
                         decensor_quantization = gr.Dropdown(
-                            choices=["None", "8-bit (bitsandbytes)", "4-bit (bitsandbytes)"],
+                            choices=["None", "4-bit (bitsandbytes)"],
                             value="None",
                             label="Quantization",
                             info="4-bit reduces VRAM usage but may affect quality",
                         )
+
+                    with gr.Column(scale=2, min_width=0):
                         decensor_batch_size = gr.Slider(
                             minimum=0, maximum=128, value=0, step=1,
                             label="Batch Size",
@@ -206,7 +414,7 @@ def create_app():
                         )
 
                 decensor_btn = gr.Button(
-                    "🚀 Start Decensoring", variant="primary", size="lg"
+                    "Start Decensoring", variant="primary", size="lg"
                 )
                 decensor_status = gr.Textbox(
                     label="Status",
@@ -230,7 +438,7 @@ def create_app():
                 )
 
             # === Evaluate Tab ===
-            with gr.Tab("📊 Evaluate", id="evaluate"):
+            with gr.Tab("Evaluate", id="evaluate"):
                 gr.Markdown("### Evaluate a decensored model")
 
                 with gr.Row():
@@ -244,7 +452,7 @@ def create_app():
                                 scale=4,
                             )
                             eval_refresh_btn = gr.Button(
-                                "🔄", size="sm", scale=0, min_width=50
+                                "Refresh", size="sm", scale=0, min_width=50
                             )
                         eval_prompt = gr.Textbox(
                             label="Test Prompt (optional)",
@@ -258,16 +466,16 @@ def create_app():
                             label="Max Tokens",
                         )
                         eval_quantization = gr.Dropdown(
-                            choices=["None", "8-bit (bitsandbytes)", "4-bit (bitsandbytes)"],
+                            choices=["None", "4-bit (bitsandbytes)"],
                             value="None",
                             label="Quantization",
                         )
 
                 with gr.Row():
                     eval_btn = gr.Button(
-                        "📊 Run Evaluation", variant="primary", size="lg"
+                        "Run Evaluation", variant="primary", size="lg"
                     )
-                    chat_btn = gr.Button("💬 Test Chat", size="lg")
+                    chat_btn = gr.Button("Test Chat", size="lg")
 
                 eval_output = gr.Textbox(
                     label="Results",
@@ -297,13 +505,13 @@ def create_app():
                 )
 
             # === Models Tab ===
-            with gr.Tab("📂 Models", id="models"):
+            with gr.Tab("Models", id="models"):
                 gr.Markdown("### Saved Models")
                 models_display = gr.Markdown(
                     "Click Refresh to see saved models."
                 )
                 with gr.Row():
-                    models_refresh_btn = gr.Button("🔄 Refresh", size="sm")
+                    models_refresh_btn = gr.Button("Refresh", size="sm")
                     model_selector = gr.Dropdown(
                         choices=get_model_names(),
                         label="Select Model",
@@ -322,7 +530,7 @@ def create_app():
                     "Download a model as a zip file for transfer to your Mac."
                 )
                 download_btn = gr.Button(
-                    "📥 Download as Zip", variant="primary"
+                    "Download as Zip", variant="primary"
                 )
                 download_status = gr.Textbox(
                     label="Status", lines=2, interactive=False
@@ -353,7 +561,7 @@ def create_app():
                 )
 
             # === About Tab ===
-            with gr.Tab("ℹ️ About", id="about"):
+            with gr.Tab("About", id="about"):
                 gr.Markdown(
                     """
                     ### Heretic Converter
@@ -394,11 +602,6 @@ if __name__ == "__main__":
     app = create_app()
     app.launch(
         server_name="0.0.0.0",
-        inbrowser=True,
-        theme=gr.themes.Soft(),
-        css="""
-        .main-header { text-align: center; margin-bottom: 0.5em; }
-        .main-header h1 { margin-bottom: 0.1em; }
-        .main-header p { color: #666; font-size: 0.95em; }
-        """,
+        server_port=9300,
+        inbrowser=False,
     )
