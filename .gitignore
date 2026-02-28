@@ -13,6 +13,7 @@ models/
 
 # Configs (user-specific)
 configs/
+heretic_config.json
 
 # Checkpoints (Optuna)
 checkpoints/

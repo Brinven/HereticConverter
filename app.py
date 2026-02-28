@@ -6,6 +6,7 @@ import gradio as gr
 from gradio.themes import Base
 from gradio.themes.utils import colors, sizes, fonts
 
+from src.config import PRESETS, DEFAULTS, load_config, save_config
 from src.decensor import run_decensor
 from src.evaluator import evaluate_model, chat_with_model
 from src.utils import list_saved_models, zip_model, import_model_zip
@@ -187,23 +188,58 @@ def _login_hf(token: str) -> None:
 # --- Decensor handler (generator) ---
 
 def handle_decensor(
-    model_path, output_name, mode, n_trials, quantization, batch_size, max_response_length, hf_token
+    model_path, output_name, mode, n_trials, quantization, batch_size, max_response_length,
+    kl_ceiling, refusal_target, target_output_layers_only, layer_range_min, layer_range_max,
+    preset, hf_token,
 ):
     """Handle the decensor button click."""
+    # Coerce gr.Number fields that can return None when cleared
+    n_trials = int(n_trials) if n_trials else 450
+    batch_size = int(batch_size) if batch_size is not None else 0
+    max_response_length = int(max_response_length) if max_response_length else 100
+    kl_ceiling = float(kl_ceiling) if kl_ceiling else 1.0
+    refusal_target = int(refusal_target) if refusal_target is not None else 5
+    layer_range_min = int(layer_range_min or 0)
+    layer_range_max = int(layer_range_max or 0)
+    model_path = str(model_path).strip() if model_path else ""
+    output_name = str(output_name).strip() if output_name else ""
+    quantization = quantization or "None"
+    mode = mode or "Decensor"
+
+    # Persist settings for next session
+    save_config({
+        "preset": preset or "Custom",
+        "kl_ceiling": kl_ceiling,
+        "n_trials": n_trials,
+        "refusal_target": refusal_target,
+        "target_output_layers_only": bool(target_output_layers_only),
+        "layer_range_min": layer_range_min,
+        "layer_range_max": layer_range_max,
+        "quantization": quantization,
+        "batch_size": batch_size,
+        "max_response_length": max_response_length,
+        "mode": mode,
+    })
+
     try:
         _login_hf(hf_token)
     except Exception as e:
-        yield f"HuggingFace login failed: {e}"
+        yield ("", f"HuggingFace login failed: {e}")
         return
     yield from run_decensor(
         model_path=model_path,
         output_name=output_name,
         mode=mode,
-        n_trials=int(n_trials),
+        n_trials=n_trials,
         quantization=quantization,
-        batch_size=int(batch_size),
-        max_response_length=int(max_response_length),
+        batch_size=batch_size,
+        max_response_length=max_response_length,
         output_dir=DEFAULT_OUTPUT_DIR,
+        kl_ceiling=kl_ceiling,
+        refusal_target=refusal_target,
+        target_output_layers_only=bool(target_output_layers_only),
+        layer_range_min=layer_range_min,
+        layer_range_max=layer_range_max,
     )
 
 
@@ -325,10 +361,72 @@ def handle_upload(file):
         return result["message"]
 
 
+# --- Preset and reactive UI helpers ---
+
+def apply_preset(preset_name):
+    """Update controls from a preset profile selection."""
+    preset = PRESETS.get(preset_name, {})
+    warning = ""
+    if preset_name == "Aggressive":
+        warning = (
+            '<div style="padding:0.5rem 0.75rem;background:#450a0a;border:1px solid #991b1b;'
+            'border-radius:6px;color:#fca5a5;font-size:0.85em;">'
+            'Aggressive settings increase risk of model damage. Monitor KL divergence closely.</div>'
+        )
+    if preset_name == "Custom":
+        return [gr.update(), gr.update(), gr.update(), warning]
+    return [
+        gr.update(value=preset.get("kl_ceiling", DEFAULTS["kl_ceiling"])),
+        gr.update(value=preset.get("refusal_target", DEFAULTS["refusal_target"])),
+        gr.update(value=preset.get("target_output_layers_only", DEFAULTS["target_output_layers_only"])),
+        warning,
+    ]
+
+
+def update_refusal_warning(target):
+    """Show warning when refusal target is dangerously low."""
+    if target is not None and target < 3:
+        return (
+            '<div style="padding:0.5rem 0.75rem;background:#422006;border:1px solid #92400e;'
+            'border-radius:6px;color:#fbbf24;font-size:0.85em;margin-top:0.25rem;">'
+            'Near-zero targets increase model damage risk</div>'
+        )
+    return ""
+
+
+def update_quant_reminder(model_path):
+    """Show quantization warning or GGUF error if model path suggests issues."""
+    path_lower = str(model_path).lower() if model_path else ""
+    if "gguf" in path_lower or path_lower.endswith(".gguf"):
+        return (
+            '<div style="padding:0.75rem 1rem;background:#450a0a;border:1px solid #991b1b;'
+            'border-radius:6px;color:#fca5a5;font-size:0.9em;margin-top:0.5rem;">'
+            '<strong>GGUF models are not supported.</strong><br>'
+            'Abliteration requires full-precision safetensors weights with individual layer access. '
+            'GGUF is a single-file quantized format that cannot be modified layer-by-layer.<br><br>'
+            'Use the <strong>base HuggingFace repo</strong> instead '
+            '(e.g. <code>org/ModelName</code> not <code>org/ModelName-GGUF</code>).</div>'
+        )
+    if path_lower and any(q in path_lower for q in ["-q4", "-q3", "_q4", "_q3", ".q4", ".q3", "/q4", "/q3"]):
+        return (
+            '<div style="padding:0.5rem 0.75rem;background:#1e1b4b;border:1px solid #4338ca;'
+            'border-radius:6px;color:#a5b4fc;font-size:0.85em;margin-top:0.5rem;">'
+            'Lower quantization reduces optimization precision. Q8 or F16 recommended.</div>'
+        )
+    return ""
+
+
+def toggle_layer_range(checked):
+    """Hide/show custom layer range inputs based on output-layers-only checkbox."""
+    return [gr.update(visible=not checked), gr.update(visible=not checked)]
+
+
 # --- Build Gradio UI ---
 
 def create_app():
     """Create and return the Gradio app."""
+    cfg = load_config()
+
     with gr.Blocks(title="Heretic Converter", theme=dark_theme, css=css) as app:
         gr.HTML(
             """
@@ -370,6 +468,11 @@ def create_app():
                             allow_custom_value=True,
                             info="Model identifier from huggingface.co",
                         )
+                        gr.HTML(
+                            '<div style="padding:0.4rem 0.6rem;background:#18181b;border:1px solid #27272a;'
+                            'border-radius:6px;color:#71717a;font-size:0.8em;margin-top:-0.25rem;margin-bottom:0.25rem;">'
+                            'Requires safetensors models — GGUF and quantized formats are not supported</div>'
+                        )
                         decensor_output_name = gr.Textbox(
                             label="Output Name (optional)",
                             placeholder="Leave blank for auto-generated name",
@@ -377,14 +480,23 @@ def create_app():
                         )
 
                     with gr.Column(scale=2, min_width=0):
-                        decensor_n_trials = gr.Slider(
-                            minimum=10, maximum=500, value=200, step=10,
-                            label="Optimization Trials",
-                            info="More trials = better results but slower",
+                        preset_profile = gr.Dropdown(
+                            choices=list(PRESETS.keys()),
+                            value=cfg.get("preset", "Balanced"),
+                            label="Preset Profile",
+                            info="Quick-select common configurations",
+                        )
+                        decensor_n_trials = gr.Number(
+                            value=cfg.get("n_trials", 450),
+                            minimum=100,
+                            maximum=2000,
+                            step=10,
+                            label="Trial Count",
+                            info="More trials = better results but slower (100-2000)",
                         )
                         decensor_quantization = gr.Dropdown(
                             choices=["None", "4-bit (bitsandbytes)"],
-                            value="None",
+                            value=cfg.get("quantization", "None"),
                             label="Quantization",
                             info="4-bit reduces VRAM usage but may affect quality",
                         )
@@ -406,6 +518,58 @@ def create_app():
                             info="Tokens generated per evaluation response",
                         )
 
+                # --- Advanced Settings ---
+                with gr.Accordion("Advanced Settings", open=False):
+                    with gr.Row(equal_height=True):
+                        with gr.Column(min_width=0):
+                            kl_ceiling = gr.Number(
+                                value=cfg.get("kl_ceiling", 1.0),
+                                minimum=0.1,
+                                maximum=5.0,
+                                step=0.1,
+                                label="KL Divergence Ceiling",
+                                info="Hard cap — trials exceeding this value are discarded",
+                            )
+                            refusal_target = gr.Slider(
+                                minimum=0, maximum=20,
+                                value=cfg.get("refusal_target", 5),
+                                step=1,
+                                label="Acceptable Refusals per 100",
+                                info="Target refusals per 100 prompts",
+                            )
+                            refusal_warning = gr.HTML("")
+
+                        with gr.Column(min_width=0):
+                            target_output_layers = gr.Checkbox(
+                                value=cfg.get("target_output_layers_only", True),
+                                label="Target output layers only (recommended)",
+                                info="Restrict modifications to later transformer layers",
+                            )
+                            layer_range_min = gr.Number(
+                                value=cfg.get("layer_range_min", 0),
+                                minimum=0,
+                                maximum=200,
+                                step=1,
+                                label="Layer Range Min",
+                                info="Custom start layer (0 = auto)",
+                                visible=not cfg.get("target_output_layers_only", True),
+                            )
+                            layer_range_max = gr.Number(
+                                value=cfg.get("layer_range_max", 0),
+                                minimum=0,
+                                maximum=200,
+                                step=1,
+                                label="Layer Range Max",
+                                info="Custom end layer (0 = auto)",
+                                visible=not cfg.get("target_output_layers_only", True),
+                            )
+
+                # --- Preset warning banner ---
+                preset_warning = gr.HTML("")
+
+                # --- Quantization reminder banner ---
+                quant_reminder = gr.HTML("")
+
                 model_source.change(
                     fn=lambda src: gr.update(
                         label="HuggingFace Model Path" if src == "HuggingFace" else "Local Model",
@@ -420,6 +584,10 @@ def create_app():
                 decensor_btn = gr.Button(
                     "Start Decensoring", variant="primary", size="lg"
                 )
+
+                # --- Results Dashboard ---
+                kl_dashboard = gr.HTML("")
+
                 decensor_status = gr.Textbox(
                     label="Status",
                     lines=18,
@@ -436,9 +604,37 @@ def create_app():
                         decensor_quantization,
                         decensor_batch_size,
                         decensor_max_response,
+                        kl_ceiling,
+                        refusal_target,
+                        target_output_layers,
+                        layer_range_min,
+                        layer_range_max,
+                        preset_profile,
                         hf_token,
                     ],
-                    outputs=decensor_status,
+                    outputs=[kl_dashboard, decensor_status],
+                )
+
+                # --- Reactive event wiring ---
+                preset_profile.change(
+                    fn=apply_preset,
+                    inputs=preset_profile,
+                    outputs=[kl_ceiling, refusal_target, target_output_layers, preset_warning],
+                )
+                refusal_target.change(
+                    fn=update_refusal_warning,
+                    inputs=refusal_target,
+                    outputs=refusal_warning,
+                )
+                decensor_model_path.change(
+                    fn=update_quant_reminder,
+                    inputs=decensor_model_path,
+                    outputs=quant_reminder,
+                )
+                target_output_layers.change(
+                    fn=toggle_layer_range,
+                    inputs=target_output_layers,
+                    outputs=[layer_range_min, layer_range_max],
                 )
 
             # === Evaluate Tab ===

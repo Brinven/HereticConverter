@@ -32,7 +32,7 @@ def evaluate_model(
         if quantization == "4-bit (bitsandbytes)":
             quant = QuantizationMethod.BNB_4BIT
 
-        kwargs = {"model": model_path}
+        kwargs = {"model": model_path, "trust_remote_code": True}
         if quant is not None:
             kwargs["quantization"] = quant
 
@@ -127,6 +127,7 @@ def chat_with_model(
         kwargs = {
             "model": model_path,
             "max_response_length": max_tokens,
+            "trust_remote_code": True,
         }
         if quant is not None:
             kwargs["quantization"] = quant

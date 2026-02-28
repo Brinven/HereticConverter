@@ -25,6 +25,7 @@ goto :run
 
 :activate
 call venv\Scripts\activate.bat
+pip install -r requirements.txt --quiet
 
 :run
 echo.
