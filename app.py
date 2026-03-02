@@ -9,6 +9,14 @@ from gradio.themes.utils import colors, sizes, fonts
 from src.config import PRESETS, DEFAULTS, load_config, save_config
 from src.decensor import run_decensor
 from src.evaluator import evaluate_model, chat_with_model
+from src.gguf import (
+    get_tool_status, download_llama_cpp_tools,
+    convert_hf_to_gguf, quantize_gguf,
+    discover_gguf_files, discover_hf_model_dirs,
+    strip_quant_suffix, make_lm_studio_path,
+    CONVERT_OUT_TYPES, RECOMMENDED_QUANT_TYPES, ALL_QUANT_TYPES,
+    MODELS_DIR,
+)
 from src.utils import list_saved_models, zip_model, import_model_zip
 
 DEFAULT_OUTPUT_DIR = "./models"
@@ -359,6 +367,109 @@ def handle_upload(file):
         return result["message"]
     else:
         return result["message"]
+
+
+# --- GGUF tab helpers ---
+
+def _format_tool_status_html(status: dict) -> str:
+    """Build a colored banner showing llama.cpp tool install state."""
+    q = status["quantize_available"]
+    c = status["convert_available"]
+    ver = status.get("version")
+
+    if q and c:
+        bg, border, text_color = "#022c22", "#065f46", "#6ee7b7"
+        icon = "&#10003;"
+        label = f"llama.cpp tools installed ({ver})" if ver else "llama.cpp tools installed"
+    elif q or c:
+        bg, border, text_color = "#422006", "#92400e", "#fbbf24"
+        icon = "&#9888;"
+        parts = []
+        if not q:
+            parts.append("llama-quantize.exe missing")
+        if not c:
+            parts.append("convert_hf_to_gguf.py missing")
+        label = "Partial install: " + ", ".join(parts)
+    else:
+        bg, border, text_color = "#18181b", "#27272a", "#a1a1aa"
+        icon = "&#9679;"
+        label = "llama.cpp tools not installed — click Download to install"
+
+    return (
+        f'<div style="padding:0.6rem 0.9rem;background:{bg};border:1px solid {border};'
+        f'border-radius:8px;color:{text_color};font-size:0.9em;font-family:\'Geist\',system-ui,sans-serif;'
+        f'display:flex;align-items:center;gap:0.5rem;">'
+        f'<span style="font-size:1.1em;">{icon}</span> {label}'
+        f'</div>'
+    )
+
+
+def handle_download_tools():
+    """Download llama.cpp tools, yielding (status_html, log_text)."""
+    log_lines = []
+    for msg in download_llama_cpp_tools():
+        log_lines.append(msg)
+        status = get_tool_status()
+        yield (
+            _format_tool_status_html(status),
+            "\n".join(log_lines),
+        )
+    # Final status
+    status = get_tool_status()
+    yield (_format_tool_status_html(status), "\n".join(log_lines))
+
+
+def handle_convert_to_gguf(model_dir, out_type, output_name):
+    """Handle HF-to-GGUF conversion. Saves in LM Studio folder layout."""
+    model_dir = str(model_dir).strip() if model_dir else ""
+    out_type = out_type or "auto"
+    output_name = str(output_name).strip() if output_name else ""
+
+    if not model_dir:
+        yield ("", "Please select a model directory.")
+        return
+
+    # Build the GGUF filename
+    if not output_name:
+        dir_name = Path(model_dir).name
+        type_label = out_type.upper() if out_type != "auto" else "F16"
+        output_name = f"{dir_name}-{type_label}.gguf"
+
+    if not output_name.lower().endswith(".gguf"):
+        output_name += ".gguf"
+
+    # Place in LM Studio layout: models/<publisher>/<model-GGUF>/<file>.gguf
+    output_path = make_lm_studio_path(output_name, source_path=model_dir)
+
+    yield from convert_hf_to_gguf(model_dir, output_path, out_type)
+
+
+def handle_quantize_gguf(input_file, quant_type, output_name, n_threads, allow_requantize, leave_output_tensor, pure):
+    """Handle GGUF quantization. Saves in LM Studio folder layout."""
+    input_file = str(input_file).strip() if input_file else ""
+    quant_type = quant_type or "Q4_K_M"
+    output_name = str(output_name).strip() if output_name else ""
+    n_threads = int(n_threads) if n_threads else 0
+    allow_requantize = bool(allow_requantize)
+    leave_output_tensor = bool(leave_output_tensor)
+    pure = bool(pure)
+
+    if not input_file:
+        yield ("", "Please select an input GGUF file.")
+        return
+
+    # Build the GGUF filename
+    if not output_name:
+        base = strip_quant_suffix(Path(input_file).name)
+        output_name = f"{base}-{quant_type}.gguf"
+
+    if not output_name.lower().endswith(".gguf"):
+        output_name += ".gguf"
+
+    # Place in LM Studio layout: models/<publisher>/<model-GGUF>/<file>.gguf
+    output_path = make_lm_studio_path(output_name, source_path=input_file)
+
+    yield from quantize_gguf(input_file, output_path, quant_type, n_threads, allow_requantize, leave_output_tensor, pure)
 
 
 # --- Preset and reactive UI helpers ---
@@ -756,6 +867,169 @@ def create_app():
                     inputs=upload_file,
                     outputs=import_status,
                 )
+
+            # === GGUF Tab ===
+            with gr.Tab("GGUF", id="gguf"):
+                # --- Tool status banner ---
+                tool_status_html = gr.HTML(
+                    _format_tool_status_html(get_tool_status())
+                )
+
+                with gr.Row():
+                    download_tools_btn = gr.Button(
+                        "Download llama.cpp Tools", variant="secondary", size="sm",
+                    )
+                download_tools_log = gr.Textbox(
+                    label="Download Log", lines=6, interactive=False, visible=False,
+                )
+
+                download_tools_btn.click(
+                    fn=handle_download_tools,
+                    outputs=[tool_status_html, download_tools_log],
+                ).then(
+                    fn=lambda: gr.update(visible=True),
+                    outputs=download_tools_log,
+                )
+
+                with gr.Tabs():
+                    # --- Convert HF to GGUF sub-tab ---
+                    with gr.Tab("Convert HF to GGUF"):
+                        with gr.Row(equal_height=True):
+                            with gr.Column(scale=3, min_width=0):
+                                convert_model_dir = gr.Dropdown(
+                                    choices=discover_hf_model_dirs(),
+                                    label="Model Directory",
+                                    allow_custom_value=True,
+                                    info="Select a local safetensors model or paste a path",
+                                )
+                                with gr.Row():
+                                    convert_refresh_btn = gr.Button(
+                                        "Refresh", size="sm", scale=0, min_width=50,
+                                    )
+
+                            with gr.Column(scale=2, min_width=0):
+                                convert_out_type = gr.Dropdown(
+                                    choices=CONVERT_OUT_TYPES,
+                                    value="auto",
+                                    label="Output Type",
+                                    info="Precision for the GGUF output (auto detects from model)",
+                                )
+                                convert_output_name = gr.Textbox(
+                                    label="Output Filename (optional)",
+                                    placeholder="Auto-generated from model name",
+                                    info="Saved to ./models/",
+                                )
+
+                        convert_btn = gr.Button(
+                            "Convert to GGUF", variant="primary", size="lg",
+                        )
+
+                        convert_dashboard = gr.HTML("")
+                        convert_status = gr.Textbox(
+                            label="Status", lines=15, interactive=False,
+                        )
+
+                        convert_refresh_btn.click(
+                            fn=lambda: gr.update(choices=discover_hf_model_dirs()),
+                            outputs=convert_model_dir,
+                        )
+
+                        convert_btn.click(
+                            fn=handle_convert_to_gguf,
+                            inputs=[convert_model_dir, convert_out_type, convert_output_name],
+                            outputs=[convert_dashboard, convert_status],
+                        )
+
+                    # --- Quantize GGUF sub-tab ---
+                    with gr.Tab("Quantize GGUF"):
+                        with gr.Row(equal_height=True):
+                            with gr.Column(scale=3, min_width=0):
+                                quant_input_file = gr.Dropdown(
+                                    choices=discover_gguf_files(),
+                                    label="Input GGUF File",
+                                    allow_custom_value=True,
+                                    info="Select a GGUF file or paste a path",
+                                )
+                                with gr.Row():
+                                    quant_refresh_btn = gr.Button(
+                                        "Refresh", size="sm", scale=0, min_width=50,
+                                    )
+
+                            with gr.Column(scale=2, min_width=0):
+                                quant_type_toggle = gr.Radio(
+                                    choices=["Recommended", "All Types"],
+                                    value="Recommended",
+                                    label="Quantization Types",
+                                )
+                                quant_type_select = gr.Dropdown(
+                                    choices=RECOMMENDED_QUANT_TYPES,
+                                    value="Q4_K_M",
+                                    label="Quantization Type",
+                                    info="Q4_K_M is the most popular balance of size vs quality",
+                                )
+                                quant_output_name = gr.Textbox(
+                                    label="Output Filename (optional)",
+                                    placeholder="Auto-generated from input name + quant type",
+                                    info="Saved to ./models/",
+                                )
+
+                        with gr.Accordion("Advanced Settings", open=False):
+                            with gr.Row(equal_height=True):
+                                with gr.Column(min_width=0):
+                                    quant_threads = gr.Slider(
+                                        minimum=0, maximum=32, value=0, step=1,
+                                        label="Threads",
+                                        info="0 = use all available threads",
+                                    )
+                                with gr.Column(min_width=0):
+                                    quant_allow_requantize = gr.Checkbox(
+                                        value=False,
+                                        label="Allow requantize",
+                                        info="Allow re-quantizing already quantized tensors",
+                                    )
+                                    quant_leave_output = gr.Checkbox(
+                                        value=False,
+                                        label="Leave output tensor",
+                                        info="Keep the output.weight tensor unquantized",
+                                    )
+                                    quant_pure = gr.Checkbox(
+                                        value=False,
+                                        label="Pure quantization",
+                                        info="Disable k-quant mixtures, quantize all tensors to the same type",
+                                    )
+
+                        quant_btn = gr.Button(
+                            "Quantize", variant="primary", size="lg",
+                        )
+
+                        quant_dashboard = gr.HTML("")
+                        quant_status = gr.Textbox(
+                            label="Status", lines=15, interactive=False,
+                        )
+
+                        # Wire quant type toggle
+                        quant_type_toggle.change(
+                            fn=lambda t: gr.update(
+                                choices=RECOMMENDED_QUANT_TYPES if t == "Recommended" else ALL_QUANT_TYPES,
+                                value="Q4_K_M" if t == "Recommended" else None,
+                            ),
+                            inputs=quant_type_toggle,
+                            outputs=quant_type_select,
+                        )
+
+                        quant_refresh_btn.click(
+                            fn=lambda: gr.update(choices=discover_gguf_files()),
+                            outputs=quant_input_file,
+                        )
+
+                        quant_btn.click(
+                            fn=handle_quantize_gguf,
+                            inputs=[
+                                quant_input_file, quant_type_select, quant_output_name,
+                                quant_threads, quant_allow_requantize, quant_leave_output, quant_pure,
+                            ],
+                            outputs=[quant_dashboard, quant_status],
+                        )
 
             # === About Tab ===
             with gr.Tab("About", id="about"):

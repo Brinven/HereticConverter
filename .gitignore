@@ -11,6 +11,9 @@ build/
 # Models (large files)
 models/
 
+# llama.cpp tools (downloaded binaries)
+tools/
+
 # Configs (user-specific)
 configs/
 heretic_config.json

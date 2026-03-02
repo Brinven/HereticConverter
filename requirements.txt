@@ -16,3 +16,4 @@ sentencepiece>=0.2
 tiktoken>=0.7
 transformers~=4.57
 rich~=14.1
+gguf>=0.16
