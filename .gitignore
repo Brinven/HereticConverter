@@ -10,6 +10,7 @@ build/
 
 # Models (large files)
 models/
+base_models/
 
 # llama.cpp tools (downloaded binaries)
 tools/

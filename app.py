@@ -15,7 +15,7 @@ from src.gguf import (
     discover_gguf_files, discover_hf_model_dirs,
     strip_quant_suffix, make_lm_studio_path,
     CONVERT_OUT_TYPES, RECOMMENDED_QUANT_TYPES, ALL_QUANT_TYPES,
-    MODELS_DIR,
+    MODELS_DIR, BASE_MODELS_DIR,
 )
 from src.utils import list_saved_models, zip_model, import_model_zip
 
@@ -318,6 +318,12 @@ def handle_download(model_name):
     match = next((m for m in models if m["name"] == model_name), None)
     if not match:
         return gr.update(), f"Model '{model_name}' not found."
+
+    model_path = Path(match["path"])
+
+    # Single GGUF file — serve directly, no need to zip
+    if model_path.is_file() and model_path.suffix.lower() == ".gguf":
+        return str(model_path), f"Ready to download: {model_path.name} ({match['size']})"
 
     result = zip_model(match["path"])
     if result["success"]:
@@ -900,7 +906,7 @@ def create_app():
                                     choices=discover_hf_model_dirs(),
                                     label="Model Directory",
                                     allow_custom_value=True,
-                                    info="Select a local safetensors model or paste a path",
+                                    info="Select a local safetensors model or paste a path — drop models into ./base_models/ for easy access",
                                 )
                                 with gr.Row():
                                     convert_refresh_btn = gr.Button(
@@ -948,7 +954,7 @@ def create_app():
                                     choices=discover_gguf_files(),
                                     label="Input GGUF File",
                                     allow_custom_value=True,
-                                    info="Select a GGUF file or paste a path",
+                                    info="Select a GGUF file or paste a path — drop files into ./base_models/ for easy access",
                                 )
                                 with gr.Row():
                                     quant_refresh_btn = gr.Button(
@@ -1070,6 +1076,7 @@ def create_app():
 
 
 if __name__ == "__main__":
+    BASE_MODELS_DIR.mkdir(exist_ok=True)
     app = create_app()
     app.launch(
         server_name="0.0.0.0",

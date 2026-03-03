@@ -17,6 +17,7 @@ from urllib.error import URLError
 
 TOOLS_DIR = Path(__file__).parent.parent / "tools" / "llama_cpp"
 MODELS_DIR = Path(__file__).parent.parent / "models"
+BASE_MODELS_DIR = Path(__file__).parent.parent / "base_models"
 
 GITHUB_API_LATEST = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
 CONVERT_SCRIPT_URL = "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/convert_hf_to_gguf.py"
@@ -437,25 +438,31 @@ def quantize_gguf(
 # ---------------------------------------------------------------------------
 
 def discover_gguf_files() -> list[str]:
-    """Scan ./models/ for *.gguf files."""
+    """Scan ./models/ and ./base_models/ for *.gguf files."""
     found = []
-    if MODELS_DIR.exists():
-        for p in sorted(MODELS_DIR.rglob("*.gguf")):
-            found.append(str(p.resolve()))
+    for scan_dir in (BASE_MODELS_DIR, MODELS_DIR):
+        if scan_dir.exists():
+            for p in sorted(scan_dir.rglob("*.gguf")):
+                resolved = str(p.resolve())
+                if resolved not in found:
+                    found.append(resolved)
     return found
 
 
 def discover_hf_model_dirs() -> list[str]:
-    """Scan ./models/ and HF cache for directories with config.json + safetensors."""
+    """Scan ./base_models/, ./models/, and HF cache for directories with config.json + safetensors."""
     found = []
 
-    # App models directory
-    if MODELS_DIR.exists():
-        for p in sorted(MODELS_DIR.iterdir()):
-            if p.is_dir() and (p / "config.json").exists():
-                has_safetensors = any(p.glob("*.safetensors"))
+    # Base models directory (user drop-in folder) and app models directory
+    for scan_dir in (BASE_MODELS_DIR, MODELS_DIR):
+        if scan_dir.exists():
+            for p in sorted(scan_dir.rglob("config.json")):
+                model_dir = p.parent
+                has_safetensors = any(model_dir.glob("*.safetensors"))
                 if has_safetensors:
-                    found.append(str(p.resolve()))
+                    resolved = str(model_dir.resolve())
+                    if resolved not in found:
+                        found.append(resolved)
 
     # HuggingFace cache
     hf_cache = Path.home() / ".cache" / "huggingface" / "hub"

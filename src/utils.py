@@ -53,7 +53,8 @@ def validate_model_dir(path: Union[str, Path]) -> bool:
         return False
     has_config = (path / "config.json").exists()
     has_weights = any(path.glob("*.safetensors"))
-    return has_config or has_weights
+    has_gguf = any(path.glob("*.gguf"))
+    return has_config or has_weights or has_gguf
 
 
 def list_saved_models(output_dir: str = "./models") -> list:
@@ -66,9 +67,25 @@ def list_saved_models(output_dir: str = "./models") -> list:
 
     for dirpath, dirnames, filenames in os.walk(output_path):
         item = Path(dirpath)
+
+        # Skip the root models/ dir itself — we only want its children
+        if item == output_path:
+            # But pick up any loose GGUF files sitting directly in models/
+            for f in filenames:
+                if f.endswith(".gguf"):
+                    fpath = item / f
+                    size = fpath.stat().st_size
+                    models.append({
+                        "name": f,
+                        "path": str(fpath),
+                        "size": format_size(size),
+                        "size_bytes": size,
+                    })
+            continue
+
         has_config = "config.json" in filenames
         has_weights = any(
-            f.endswith(".safetensors") or f.endswith(".npz")
+            f.endswith(".safetensors") or f.endswith(".npz") or f.endswith(".gguf")
             for f in filenames
         )
 
@@ -97,7 +114,7 @@ def zip_model(model_path: str) -> dict:
 
     files = list(model_dir.iterdir())
     has_model_files = any(
-        f.name == "config.json" or f.suffix in (".safetensors", ".npz")
+        f.name == "config.json" or f.suffix in (".safetensors", ".npz", ".gguf")
         for f in files
         if f.is_file()
     )
@@ -150,6 +167,7 @@ def import_model_zip(zip_path: str, output_dir: str = "./models") -> dict:
                 n.endswith("config.json")
                 or n.endswith(".safetensors")
                 or n.endswith(".npz")
+                or n.endswith(".gguf")
                 for n in names
             )
             if not has_model_files:
