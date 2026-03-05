@@ -1,5 +1,6 @@
 """Core decensoring pipeline wrapping Heretic's abliteration engine."""
 
+import io
 import os
 import sys
 import time
@@ -178,6 +179,102 @@ def _trial_sort_key(t, target):
 # ---------------------------------------------------------------------------
 # Transformers tokenizer compatibility patch
 # ---------------------------------------------------------------------------
+
+@contextmanager
+def _capture_heretic_output():
+    """Capture heretic's rich console output so we can surface per-dtype errors.
+
+    Heretic's Model.__init__ prints detailed per-dtype errors via a `print`
+    imported from heretic.utils (bound to a rich Console).  Since model.py
+    imports `print` at module level, we must patch the reference in both
+    heretic.utils AND heretic.model to intercept it.
+    """
+    captured = io.StringIO()
+    try:
+        from rich.console import Console
+        import heretic.utils as _hu
+        import heretic.model as _hm
+        capture_print = Console(
+            file=captured, force_terminal=False, no_color=True, highlight=False,
+        ).print
+        orig_utils_print = _hu.print
+        orig_model_print = _hm.print
+        _hu.print = capture_print
+        _hm.print = capture_print
+        try:
+            yield captured
+        finally:
+            _hu.print = orig_utils_print
+            _hm.print = orig_model_print
+    except (ImportError, AttributeError):
+        yield captured
+
+
+@contextmanager
+def _patch_hybrid_lora():
+    """Patch Model._apply_lora to discover abliterable modules from ALL layers.
+
+    Heretic's _apply_lora() only examines layer 0 to decide which modules
+    get LoRA adapters.  Hybrid architectures (e.g. Qwen3.5 with alternating
+    DeltaNet and Attention layers) have different modules per layer type.
+    Without this patch, modules only present in non-zero layers (like
+    attn.o_proj in attention layers) won't get LoRA, and abliterate() will
+    crash when it tries to write LoRA weights to them.
+
+    This patches _apply_lora to scan every layer for target modules so that
+    LoRA covers the full union of components.
+    """
+    from heretic.model import Model
+    original_apply_lora = Model._apply_lora
+
+    def _patched_apply_lora(self):
+        from typing import cast as _cast
+        from torch.nn import Module as _Module
+        from peft import LoraConfig, PeftModel, get_peft_model
+        from heretic.config import RowNormalization
+
+        assert isinstance(self.model, __import__("transformers").PreTrainedModel)
+
+        # Collect target module IDs from ALL layers (not just layer 0)
+        target_ids = set()
+        for i in range(len(self.get_layers())):
+            for mods in self.get_layer_modules(i).values():
+                for mod in mods:
+                    if isinstance(mod, _Module):
+                        target_ids.add(id(mod))
+
+        target_modules = list({
+            name.split(".")[-1]
+            for name, mod in self.model.named_modules()
+            if id(mod) in target_ids
+        })
+
+        # Same as original — only the target discovery above is changed
+        if self.settings.row_normalization != RowNormalization.FULL:
+            lora_rank = 1
+        else:
+            lora_rank = self.settings.full_normalization_lora_rank
+
+        self.peft_config = LoraConfig(
+            r=lora_rank,
+            target_modules=target_modules,
+            lora_alpha=lora_rank,
+            lora_dropout=0,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        self.model = _cast(PeftModel, get_peft_model(self.model, self.peft_config))
+
+        from heretic.utils import print as _hprint
+        _hprint(f"* LoRA adapters initialized (targets: {', '.join(target_modules)})")
+
+    Model._apply_lora = _patched_apply_lora
+    try:
+        yield
+    finally:
+        Model._apply_lora = original_apply_lora
+
 
 @contextmanager
 def _patch_slow_tokenizer():
@@ -390,12 +487,17 @@ def run_decensor(
         from heretic.model import Model, AbliterationParameters
 
         try:
-            with _patch_slow_tokenizer():
+            with _capture_heretic_output() as captured, _patch_slow_tokenizer(), _patch_hybrid_lora():
                 model = Model(settings)
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
-            yield ("", f"Failed to load model: {e}\n\nTraceback:\n{tb}")
+            # Include heretic's per-dtype console output for diagnostics
+            heretic_log = captured.getvalue().strip()
+            detail = f"Failed to load model: {e}\n\nTraceback:\n{tb}"
+            if heretic_log:
+                detail += f"\n\nHeretic log (per-dtype attempts):\n{heretic_log}"
+            yield ("", detail)
             return
 
         elapsed = format_duration(time.time() - start_time)
@@ -518,6 +620,18 @@ def run_decensor(
 
         last_layer_index = len(model.get_layers()) - 1
 
+        # Discover ALL abliterable components across every layer.
+        # Hybrid architectures (e.g. Qwen3.5 with DeltaNet + Attention layers)
+        # have different components per layer type.  heretic's
+        # get_abliterable_components() only checks layer 0, which causes a
+        # KeyError in abliterate() when it encounters layers with extra
+        # components.  We scan all layers and provide parameters for every
+        # component seen anywhere.
+        all_components = set()
+        for _li in range(last_layer_index + 1):
+            all_components.update(model.get_layer_modules(_li).keys())
+        all_components = sorted(all_components)
+
         # --- Compute layer targeting ranges ---
         if target_output_layers_only:
             dir_idx_lo = 0.6 * last_layer_index
@@ -553,6 +667,8 @@ def run_decensor(
         phase7_start = time.time()
         trial_index = 0
         kl_exceeded_count = 0
+        consecutive_errors = 0
+        last_error = None
 
         def objective(trial):
             """Optuna objective — matches Heretic's run() exactly."""
@@ -574,7 +690,7 @@ def run_decensor(
                 direction_index = None
 
             parameters = {}
-            for component in model.get_abliterable_components():
+            for component in all_components:
                 max_weight = trial.suggest_float(f"{component}.max_weight", 0.8, 1.5)
                 max_weight_position = trial.suggest_float(
                     f"{component}.max_weight_position",
@@ -639,8 +755,19 @@ def run_decensor(
                 )
                 continue
             except Exception as e:
+                consecutive_errors += 1
+                last_error = str(e)
                 yield ("", f"Phase 7/8: Trial {trial_num}/{n_trials} — Error: {e}")
+                if consecutive_errors >= 3:
+                    yield ("", (
+                        f"Phase 7/8: Aborting — {consecutive_errors} consecutive trial failures.\n"
+                        f"Last error: {last_error}\n\n"
+                        "This model's architecture may not be compatible with abliteration."
+                    ))
+                    break
                 continue
+
+            consecutive_errors = 0  # reset on success
 
             # Extract latest trial results from user_attrs
             latest = study.trials[-1]
@@ -751,7 +878,12 @@ def run_decensor(
                 yield ("", "WARNING: No trial met the KL ceiling. Using the trial with lowest KL divergence.")
 
             if not valid_trials:
-                yield ("", "No completed trials found. Cannot save model.")
+                import optuna
+                n_fail = sum(1 for t in study.trials if t.state == optuna.trial.TrialState.FAIL)
+                msg = f"No completed trials found. Cannot save model.\n  Total trials: {len(study.trials)}, Failed: {n_fail}"
+                if last_error:
+                    msg += f"\n  Last error: {last_error}"
+                yield ("", msg)
                 return
 
             best_trial = min(valid_trials, key=lambda t: _trial_sort_key(t, refusal_target))
