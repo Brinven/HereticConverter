@@ -245,6 +245,15 @@ settings = Settings(model="org/model-name", _cli_parse_args=False)
 
 Test both approaches and use whichever works with the installed pydantic-settings version.
 
+### Hybrid architecture support
+Heretic's `_apply_lora()` and `get_abliterable_components()` only examine layer 0.
+Models with hybrid architectures (e.g. Qwen3.5 with alternating DeltaNet + Attention
+layers) have different abliterable modules per layer type. Our patches:
+- `_patch_hybrid_lora()` — replaces `_apply_lora` to scan ALL layers for LoRA targets
+- `all_components` scan in objective — builds Optuna parameters for every component type
+- Without these, attention-only components (e.g. `attn.o_proj`) get no LoRA and
+  `abliterate()` crashes with KeyError on every trial
+
 ### Core algorithm flow (from `main.py:run()`):
 1. **Load model:** `model = Model(settings)` — loads HF model, wraps with LoRA adapters
 2. **Load prompts:** `good_prompts = load_prompts(settings, settings.good_prompts)` (and bad_prompts)
@@ -356,11 +365,11 @@ heretic-llm>=1.2.0
 accelerate~=1.10
 bitsandbytes~=0.45
 datasets~=4.0
-huggingface-hub~=0.34
+huggingface-hub>=0.34
 optuna~=4.5
 peft~=0.14
 pydantic-settings~=2.10
-transformers~=4.57
+transformers>=5.0
 rich~=14.1
 ```
 
